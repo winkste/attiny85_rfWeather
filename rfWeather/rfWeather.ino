@@ -77,7 +77,7 @@ static float humidity_f32        = 0.0f;
 static float temperature_f32     = 0.0f;
 static int16_t txTemperature_s16 = 0;
 static int16_t txHumidity_s16    = 0;
-static uint16_t counter_u16      = 0u;
+static uint16_t counter_u16s     = 0u;
 static msg_t  myMessage_s;
 
 
@@ -110,7 +110,7 @@ void setup() {
   RfProcl::SetFromNodeId(&myMessage_s, MY_NODE_ID);
   RfProcl::SetToNodeId(&myMessage_s, MY_SERVER_ID);
 
-  counter_u16 = 0u;
+  counter_u16s = 0u;
 
   // enable the watchdog
   //enableWatchdog();
@@ -128,12 +128,12 @@ void loop()
   int chk         = DHT22.read22(DHT22PIN);
   humidity_f32    = DHT22.humidity;
   temperature_f32 = DHT22.temperature;
-  bool succ_bol = true;
+  /*bool succ_bol = true;
   uint8_t data_u8a[4];
   uint16_t data_u16a[2];
-  uint32_t data_u32;
+  uint32_t data_u32;*/
 
-  RfProcl::InitializeMessage(&myMessage_s);
+  /*RfProcl::InitializeMessage(&myMessage_s);
   RfProcl::SetFromNodeId(&myMessage_s, FROM_NODE_ID_03);
   RfProcl::SetToNodeId(&myMessage_s, TO_NODE_ID_03);
   RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_03);
@@ -215,31 +215,31 @@ void loop()
     data_u32 = ((uint32_t)(data_u16a[0]) << 16) + data_u16a[1];
     mySwitch.send(data_u32, 32);
     delay(2000);
-  }
-  /*
+  }*/
+  
   RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_CNT);
-  RfProcl::SetMsgData(&myMessage_s, counter_u16);
+  RfProcl::SetMsgData(&myMessage_s, counter_u16s);
   RfProcl::CalculateChkSum(&myMessage_s);
   mySwitch.send(RfProcl::GetRawData(&myMessage_s), 32);
-  counter_u16++;
-  delay(1000);*/
-  /*
+  counter_u16s++;
+  delay(1000);
+  
   txTemperature_s16 = (int16_t)(temperature_f32 * 100.0); 
   RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_TEMP);
   RfProcl::SetMsgData(&myMessage_s, (uint16_t)txTemperature_s16);
   RfProcl::CalculateChkSum(&myMessage_s);
   mySwitch.send(RfProcl::GetRawData(&myMessage_s), 32);
-  delay(500);
+  delay(1000);
   
   txHumidity_s16 = (int16_t)(humidity_f32 * 100.0); 
   RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_HUM);
-  RfProcl::SetMsgData(&myMessage_s, (uint16_t)txTemperature_s16);
+  RfProcl::SetMsgData(&myMessage_s, (uint16_t)txHumidity_s16);
   RfProcl::CalculateChkSum(&myMessage_s);
   mySwitch.send(RfProcl::GetRawData(&myMessage_s), 32);
-  delay(500); */ 
+  delay(1000); 
 
-  mySwitch.send(4444, 24);
-  delay(3000);
+  /*mySwitch.send(4444, 24);
+  delay(3000);*/
   // deep sleep
   /*for(uint8_t i=0;i < WATCHDOG_WAKEUPS_TARGET;i++)
   {

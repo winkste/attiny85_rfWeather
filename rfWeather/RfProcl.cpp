@@ -77,7 +77,7 @@ vAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 #define MSG_POSTAMBLE               0x01u
 #define MSG_TO_NODE_ID_MASK         0x60u
 #define MSG_FROM_NODE_ID_MASK       0x18u
-#define MSG_FROM_MSGTYPE_ID_MASK    0x06u
+#define MSG_MSGTYPE_ID_MASK         0x06u
 #define MAX_NODE_ID                 0x03u
 #define MAX_MESSAGE_TYPE            0x03u 
 
@@ -160,7 +160,7 @@ uint8_t RfProcl::GetMsgTypeId(msg_t *msg_p)
 {
     uint8_t msgTypeId_u8 = 0;
 
-    msgTypeId_u8 = msg_p->header_u8 & MSG_FROM_MSGTYPE_ID_MASK;
+    msgTypeId_u8 = msg_p->header_u8 & MSG_MSGTYPE_ID_MASK;
     msgTypeId_u8 = msgTypeId_u8 >> 1; 
 
     return(msgTypeId_u8);
@@ -211,6 +211,9 @@ bool RfProcl::SetToNodeId(msg_t *msg_p, uint8_t toNodeId_u8)
 
     if((NULL != msg_p) && (toNodeId_u8 <= MAX_NODE_ID))
     {
+        // clear actual to node
+        msg_p->header_u8 &= ~MSG_TO_NODE_ID_MASK;
+        // set new to node id
         msg_p->header_u8 |= (toNodeId_u8 << 5);
         fctAck_bol = true;
     }
@@ -232,6 +235,9 @@ bool RfProcl::SetFromNodeId(msg_t *msg_p, uint8_t fromNodeId_u8)
 
     if((NULL != msg_p) && (fromNodeId_u8 <= MAX_NODE_ID))
     {
+        // clear actual from node
+        msg_p->header_u8 &= ~MSG_FROM_NODE_ID_MASK;
+        // set new from node id
         msg_p->header_u8 |= (fromNodeId_u8 << 3);
         fctAck_bol = true;       
     }
@@ -253,6 +259,9 @@ bool RfProcl::SetMsgTypeId(msg_t *msg_p, uint8_t msgTypeId_u8)
 
     if((NULL != msg_p) && (msgTypeId_u8 <= MAX_MESSAGE_TYPE))
     {
+        // clear actual msg type
+        msg_p->header_u8 &= ~MSG_MSGTYPE_ID_MASK;
+        // set new message type
         msg_p->header_u8 |= (msgTypeId_u8 << 1);
         fctAck_bol = true;       
     }

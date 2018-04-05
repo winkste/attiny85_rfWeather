@@ -39,8 +39,9 @@ vAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 #include <RCSwitch.h>
 #include <RCSwitch.h>
 #include "dht.h" //From Rob Tillaart
-#include "RfProcl.h"
-#include "RfDevices.h"
+#include <RfProcl.h>
+#include <RfDevices.h>
+
 
 /****************************************************************************************/
 /* Local constant defines */
@@ -54,14 +55,23 @@ vAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 #define DIGI_PIN_D4               4u  
 #define DIGI_PIN_D5               5u 
 
-#define TX_PIN                    DIGI_PIN_D2
-#define DHT22PIN                  DIGI_PIN_D3
+#define TX_PIN                    DIGI_PIN_D3
+#define DHT22PIN                  DIGI_PIN_D2
 
 // time until the watchdog wakes the mc in seconds
-#define WATCHDOG_TIME             8 // 1, 2, 4 or 8
+#define WATCHDOG_TIME             8u // 1, 2, 4 or 8
  
 // after how many watchdog wakeups we should collect and send the data
-#define WATCHDOG_WAKEUPS_TARGET   7 // 8 * 7 = 56 seconds between each data collection
+#define WATCHDOG_WAKEUPS_TARGET   1u // 8 * 7 = 56 seconds between each data collection
+
+// after how many data collections we should get the battery status
+#define BAT_CHECK_INTERVAL        30u
+ 
+// min max values for the ADC to calculate the battery percent
+#define BAT_ADC_MIN               0u  // ~0V
+#define BAT_ADC_MAX               1023u // ~10V
+#define BAT_ADC_REF_VOLTAGE       5.0f
+#define BAT_ADC_VOLT_DIVID        2u
 
 /****************************************************************************************/
 /* Local function like makros */
@@ -71,236 +81,257 @@ vAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 
 /****************************************************************************************/
 /* Static Data instantiation */
-static RCSwitch mySwitch         = RCSwitch();
-static dht DHT22;
-static float humidity_f32        = 0.0f;
-static float temperature_f32     = 0.0f;
-static int16_t txTemperature_s16 = 0;
-static int16_t txHumidity_s16    = 0;
-static uint16_t counter_u16s     = 0u;
-static msg_t  myMessage_s;
+static RCSwitch mySwitch_sts      = RCSwitch();
+static dht dht22_sts;
+static float humidity_f32s        = 0.0f;
+static float temperature_f32s     = 0.0f;
+static int16_t txTemperature_s16s = 0;
+static int16_t txHumidity_s16s    = 0;
+static uint16_t counter_u16s      = 0u;
+static uint16_t isrCounter_u16s   = 0u;
+static uint16_t batVal_u16s       = 0u;
+static msg_t  myMessage_sts;
 
+// counter for the battery check, starting at BAT_CHECK_INTERVAL to 
+// transmit the battery status on first loop
+static uint8_t batCheckCount_u8s  = BAT_CHECK_INTERVAL;
+
+/****************************************************************************************/
+/* Local functions (reduced visibility) */
+static void EnableWatchdog(void);
+static void EnterSleep(void);
+static void SetupAdc(void);
+static uint16_t BatCheck(void);
 
 /****************************************************************************************/
 /* Public functions (unlimited visibility) */
 
 /**---------------------------------------------------------------------------------------
- * @brief     Verifies the message by checking the pre/post amble and checksum
+ * @brief     ARDUINO Setup function
  * @author    winkste
  * @date      06. Mar. 2018
- * @param     msg_p     pointer to message buffer
  * @return    true, if message is compliant to checks
 *//*-----------------------------------------------------------------------------------*/
-void setup() {
-  
-  // Transmitter is connected to Arduino Pin #10  
-  mySwitch.enableTransmit(TX_PIN);
-  
-  // Optional set protocol (default is 1, will work for most outlets)
-  // mySwitch.setProtocol(2);
-
-  // Optional set pulse length.
-  // mySwitch.setPulseLength(320);
-  
-  // Optional set number of transmission repetitions.
-  // mySwitch.setRepeatTransmit(15);
-
-  // initialize message 
-  RfProcl::InitializeMessage(&myMessage_s);
-  RfProcl::SetFromNodeId(&myMessage_s, MY_NODE_ID);
-  RfProcl::SetToNodeId(&myMessage_s, MY_SERVER_ID);
-
-  counter_u16s = 0u;
-
-  // enable the watchdog
-  //enableWatchdog();
+void setup() 
+{
+    pinMode(TX_PIN, OUTPUT);
+    digitalWrite(TX_PIN, LOW);
+    
+    // setup the input voltage measurement
+    SetupAdc();
+    
+    // Transmitter is connected to Arduino Pin #10  
+    mySwitch_sts.enableTransmit(TX_PIN);
+    
+    // Optional set protocol (default is 1, will work for most outlets)
+    // mySwitch_sts.setProtocol(2);
+    
+    // Optional set pulse length.
+    // mySwitch_sts.setPulseLength(320);
+    
+    // Optional set number of transmission repetitions.
+    // mySwitch_sts.setRepeatTransmit(15);
+    
+    // initialize message 
+    RfProcl::InitializeMessage(&myMessage_sts);
+    RfProcl::SetFromNodeId(&myMessage_sts, MY_NODE_ID);
+    RfProcl::SetToNodeId(&myMessage_sts, MY_SERVER_ID);
+    
+    counter_u16s = 0u;
+    
+    // enable the watchdog
+    EnableWatchdog();
 }
 
 /**---------------------------------------------------------------------------------------
- * @brief     Verifies the message by checking the pre/post amble and checksum
+ * @brief     ARDUINO loop function
  * @author    winkste
  * @date      06. Mar. 2018
- * @param     msg_p     pointer to message buffer
- * @return    true, if message is compliant to checks
+ * @return    n/a
 *//*-----------------------------------------------------------------------------------*/
 void loop() 
 {
-  int chk         = DHT22.read22(DHT22PIN);
-  humidity_f32    = DHT22.humidity;
-  temperature_f32 = DHT22.temperature;
-  /*bool succ_bol = true;
-  uint8_t data_u8a[4];
-  uint16_t data_u16a[2];
-  uint32_t data_u32;*/
-
-  /*RfProcl::InitializeMessage(&myMessage_s);
-  RfProcl::SetFromNodeId(&myMessage_s, FROM_NODE_ID_03);
-  RfProcl::SetToNodeId(&myMessage_s, TO_NODE_ID_03);
-  RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_03);
-  RfProcl::SetMsgData(&myMessage_s, 0xa5a5);
-  RfProcl::CalculateChkSum(&myMessage_s);
-
-  succ_bol = RfProcl::VerifyMessage(&myMessage_s);
-  if(FROM_NODE_ID_03 != RfProcl::GetFromNodeId(&myMessage_s))
-  {
-      succ_bol = false;
-      mySwitch.send(0xf1, 8);
-      delay(1000);
-  }
-  if(TO_NODE_ID_03 != RfProcl::GetToNodeId(&myMessage_s))
-  {
-      succ_bol = false;
-      mySwitch.send(0xf2, 8);
-      delay(1000);
-  }
-  if(MSG_ID_03 != RfProcl::GetMsgTypeId(&myMessage_s))
-  {
-      succ_bol = false;
-      mySwitch.send(0xf3, 8);
-      delay(1000);
-  }
-  if(0xa5a5 != RfProcl::GetMsgData(&myMessage_s))
-  {
-      succ_bol = false;
-      mySwitch.send(0xf4, 8);
-      delay(1000);
-  }
-  if(0xffa5a549 != RfProcl::GetRawData(&myMessage_s))
-  {
-      succ_bol = false;
-      mySwitch.send(0xf5, 8);
-      delay(1000);
-  }
-  
-  if(true == succ_bol)
-  {
-    mySwitch.send(RfProcl::GetRawData(&myMessage_s), 32);
-    delay(2000);
-  }
-  else
-  {
-    mySwitch.send(myMessage_s.header_u8, 8);
+    int chk         = dht22_sts.read22(DHT22PIN);
+    humidity_f32s    = dht22_sts.humidity;
+    temperature_f32s = dht22_sts.temperature;
+    
+      // battery check/status
+    /*batCheckCount_u8s++;
+    if(batCheckCount_u8s >= BAT_CHECK_INTERVAL)
+    {
+      BatCheck();
+      batCheckCount_u8s = 0;
+    }*/
+    
+    RfProcl::SetMsgTypeId(&myMessage_sts, MSG_ID_CNT);
+    RfProcl::SetMsgData(&myMessage_sts, counter_u16s);
+    RfProcl::CalculateChkSum(&myMessage_sts);
+    mySwitch_sts.send(RfProcl::GetRawData(&myMessage_sts), 32);
+    counter_u16s++;
     delay(1000);
-    mySwitch.send(myMessage_s.data_u16, 16);
+    
+    txTemperature_s16s = (int16_t)(temperature_f32s * 100.0); 
+    RfProcl::SetMsgTypeId(&myMessage_sts, MSG_ID_TEMP);
+    RfProcl::SetMsgData(&myMessage_sts, (uint16_t)txTemperature_s16s);
+    RfProcl::CalculateChkSum(&myMessage_sts);
+    mySwitch_sts.send(RfProcl::GetRawData(&myMessage_sts), 32);
     delay(1000);
-    mySwitch.send(myMessage_s.chkSum_u8, 8);
-    delay(2000);
-    data_u8a[0] = (uint8_t)((RfProcl::GetRawData(&myMessage_s) & 0xFF000000) >> 24);
-    data_u8a[1] = (uint8_t)((RfProcl::GetRawData(&myMessage_s) & 0x00FF0000) >> 16);
-    data_u8a[2] = (uint8_t)((RfProcl::GetRawData(&myMessage_s) & 0x0000FF00) >> 8);
-    data_u8a[3] = (uint8_t)((RfProcl::GetRawData(&myMessage_s) & 0x000000FF));
-    mySwitch.send(data_u8a[0], 16);
-    delay(1000);
-    mySwitch.send(data_u8a[1], 16);
-    delay(1000);
-    mySwitch.send(data_u8a[2], 16);
-    delay(1000);
-    mySwitch.send(data_u8a[3], 16);
-    delay(2000);
-
-    data_u16a[0] = (uint16_t)((RfProcl::GetRawData(&myMessage_s) & 0xFFFF0000) >> 16);
-    data_u16a[1] = (uint16_t)((RfProcl::GetRawData(&myMessage_s) & 0x0000FFFF));
-    mySwitch.send(data_u16a[0], 16);
-    delay(1000);
-    mySwitch.send(data_u16a[1], 16);
-    delay(2000);
-
-    data_u16a[0] = (uint16_t)((((uint16_t)myMessage_s.header_u8) << 8) + ((myMessage_s.data_u16 & 0xFF00) >> 8));
-    data_u16a[1] = (uint16_t)(((myMessage_s.data_u16 & 0x00FF) << 8) + myMessage_s.chkSum_u8);
-    mySwitch.send(data_u16a[0], 16);
-    delay(1000);
-    mySwitch.send(data_u16a[1], 16);
-    delay(2000);
-
-    data_u32 = ((uint32_t)(data_u16a[0]) << 16) + data_u16a[1];
-    mySwitch.send(data_u32, 32);
-    delay(2000);
-  }*/
-  
-  RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_CNT);
-  RfProcl::SetMsgData(&myMessage_s, counter_u16s);
-  RfProcl::CalculateChkSum(&myMessage_s);
-  mySwitch.send(RfProcl::GetRawData(&myMessage_s), 32);
-  counter_u16s++;
-  delay(1000);
-  
-  txTemperature_s16 = (int16_t)(temperature_f32 * 100.0); 
-  RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_TEMP);
-  RfProcl::SetMsgData(&myMessage_s, (uint16_t)txTemperature_s16);
-  RfProcl::CalculateChkSum(&myMessage_s);
-  mySwitch.send(RfProcl::GetRawData(&myMessage_s), 32);
-  delay(1000);
-  
-  txHumidity_s16 = (int16_t)(humidity_f32 * 100.0); 
-  RfProcl::SetMsgTypeId(&myMessage_s, MSG_ID_HUM);
-  RfProcl::SetMsgData(&myMessage_s, (uint16_t)txHumidity_s16);
-  RfProcl::CalculateChkSum(&myMessage_s);
-  mySwitch.send(RfProcl::GetRawData(&myMessage_s), 32);
-  delay(1000); 
-
-  /*mySwitch.send(4444, 24);
-  delay(3000);*/
-  // deep sleep
-  /*for(uint8_t i=0;i < WATCHDOG_WAKEUPS_TARGET;i++)
-  {
-    enterSleep();
-  }*/
+    
+    txHumidity_s16s = (int16_t)(humidity_f32s * 100.0); 
+    RfProcl::SetMsgTypeId(&myMessage_sts, MSG_ID_HUM);
+    RfProcl::SetMsgData(&myMessage_sts, (uint16_t)txHumidity_s16s);
+    RfProcl::CalculateChkSum(&myMessage_sts);
+    mySwitch_sts.send(RfProcl::GetRawData(&myMessage_sts), 32);
+    delay(1000); 
+    
+    batVal_u16s = BatCheck();
+    RfProcl::SetMsgTypeId(&myMessage_sts, MSG_ID_BAT);
+    RfProcl::SetMsgData(&myMessage_sts, batVal_u16s);
+    RfProcl::CalculateChkSum(&myMessage_sts);
+    mySwitch_sts.send(RfProcl::GetRawData(&myMessage_sts), 32);
+    delay(1000); 
+    
+    // deep sleep
+    for(uint8_t idx_u8 = 0u; idx_u8 < WATCHDOG_WAKEUPS_TARGET; idx_u8++)
+    {
+        EnterSleep();
+    }
 }
 
 /****************************************************************************************/
 /* Private functions: */
 /**---------------------------------------------------------------------------------------
- * @brief     Verifies the message by checking the pre/post amble and checksum
+ * @brief     Configures and enables the Wotchdog
  * @author    winkste
  * @date      06. Mar. 2018
- * @param     msg_p     pointer to message buffer
- * @return    true, if message is compliant to checks
+ * @return    n/a
 *//*-----------------------------------------------------------------------------------*/
-void enableWatchdog()
+void EnableWatchdog(void)
 {
-  cli();
-  
-  // clear the reset flag
-  MCUSR &= ~(1<<WDRF);
-  
-  // set WDCE to be able to change/set WDE
-  WDTCR |= (1<<WDCE) | (1<<WDE);
- 
-  // set new watchdog timeout prescaler value
-  #if WATCHDOG_TIME == 1
-    WDTCR = 1<<WDP1 | 1<<WDP2;
-  #elif WATCHDOG_TIME == 2
-    WDTCR = 1<<WDP0 | 1<<WDP1 | 1<<WDP2;
-  #elif WATCHDOG_TIME == 4
-    WDTCR = 1<<WDP3;
-  #elif WATCHDOG_TIME == 8
-    WDTCR = 1<<WDP0 | 1<<WDP3;
-  #else
-    #error WATCHDOG_TIME must be 1, 2, 4 or 8!
-  #endif
-  
-  // enable the WD interrupt to get an interrupt instead of a reset
-  WDTCR |= (1<<WDIE);
-  
-  sei();
+    cli();
+    
+    // clear the reset flag
+    MCUSR &= ~(1 << WDRF);
+    
+    // set WDCE to be able to change/set WDE
+    WDTCR |= (1 << WDCE) | (1 << WDE);
+    
+    // set new watchdog timeout prescaler value
+    #if WATCHDOG_TIME == 1
+      WDTCR = 1 << WDP1 | 1 << WDP2;
+    #elif WATCHDOG_TIME == 2
+      WDTCR = 1 << WDP0 | 1 << WDP1 | 1 << WDP2;
+    #elif WATCHDOG_TIME == 4
+      WDTCR = 1 << WDP3;
+    #elif WATCHDOG_TIME == 8
+      WDTCR = 1 << WDP0 | 1 << WDP3;
+    #else
+      #error WATCHDOG_TIME must be 1, 2, 4 or 8!
+    #endif
+    
+    // enable the WD interrupt to get an interrupt instead of a reset
+    WDTCR |= (1 << WDIE);
+    
+    sei();
 }
 
 /**---------------------------------------------------------------------------------------
- * @brief     Verifies the message by checking the pre/post amble and checksum
+ * @brief     function to go to sleep
  * @author    winkste
  * @date      06. Mar. 2018
- * @param     msg_p     pointer to message buffer
+ * @return    n/a
+*//*-----------------------------------------------------------------------------------*/
+void EnterSleep(void)
+{
+    /* EDIT: could also use SLEEP_MODE_PWR_DOWN for lowest power consumption. */
+    set_sleep_mode(SLEEP_MODE_PWR_DOWN);   
+    sleep_enable();
+    
+    /* Now enter sleep mode. */
+    sleep_mode();
+    
+    /* The program will continue from here after the WDT timeout*/
+    sleep_disable(); /* First thing to do is disable sleep. */
+}
+
+/**---------------------------------------------------------------------------------------
+ * @brief     Setup of the A to D measurement for battery voltage at pin PB4
+ * @author    winkste
+ * @date      06. Mar. 2018
  * @return    true, if message is compliant to checks
 *//*-----------------------------------------------------------------------------------*/
-// function to go to sleep
-void enterSleep(void)
+void SetupAdc(void)
 {
-  set_sleep_mode(SLEEP_MODE_PWR_DOWN);   /* EDIT: could also use SLEEP_MODE_PWR_DOWN for lowest power consumption. */
-  sleep_enable();
-  
-  /* Now enter sleep mode. */
-  sleep_mode();
-  
-  /* The program will continue from here after the WDT timeout*/
-  sleep_disable(); /* First thing to do is disable sleep. */
+      // setup the ADC
+    ADMUX =
+      (1 << ADLAR) | // left shift result
+      (0 << REFS1) | // Sets ref. voltage to VCC, bit 0
+      (0 << REFS0) | // Sets ref. voltage to VCC, bit 0
+      (0 << MUX3)  | // use ADC2 for input (PB4), MUX bit 3
+      (0 << MUX2)  | // use ADC2 for input (PB4), MUX bit 2
+      (1 << MUX1)  | // use ADC2 for input (PB4), MUX bit 1
+      (0 << MUX0);   // use ADC2 for input (PB4), MUX bit 0
+    ADCSRA =
+      (1 << ADEN)  | // enable ADC
+      (1 << ADPS2) | // set prescaler to 64, bit 2
+      (1 << ADPS1) | // set prescaler to 64, bit 1
+      (0 << ADPS0);  // set prescaler to 64, bit 0
+    
+    // disable ADC for powersaving
+    ADCSRA &= ~(1<<ADEN);
+    
+    // disable analog comperator for powersaving
+    ACSR |= (1<<ACD);
+}
+
+/**---------------------------------------------------------------------------------------
+ * @brief     function to read and send the battery status
+ * @author    winkste
+ * @date      06. Mar. 2018
+ * @return    returns the measured voltage at Pon pb4
+*//*-----------------------------------------------------------------------------------*/
+uint16_t BatCheck(void)
+{
+    uint16_t rawAdcVal_u16;
+    float measuredVoltage_f32;
+    
+    // enable the ADC
+    ADCSRA |= (1 << ADEN);
+    
+    // short delay
+    _delay_ms(10);
+    
+    ADCSRA |= (1 << ADSC); // start ADC measurement
+    while ( ADCSRA & (1 << ADSC) ); // wait till conversion complete
+    
+    rawAdcVal_u16 =  ADCH << 2;
+    rawAdcVal_u16 += ADCL >> 6;
+    
+    // clear the ADIF bit by writing 1 to it
+    ADCSRA |= (1 << ADIF);
+    
+    // disable the ADC
+    ADCSRA &= ~(1 << ADEN);
+    
+    // calc the battery voltage based on the reference voltage
+    measuredVoltage_f32 = (float)rawAdcVal_u16;
+    measuredVoltage_f32 = measuredVoltage_f32 / 1024.0f;
+    measuredVoltage_f32 = measuredVoltage_f32 * BAT_ADC_REF_VOLTAGE;
+    measuredVoltage_f32 = measuredVoltage_f32 / BAT_ADC_VOLT_DIVID;
+    measuredVoltage_f32 = measuredVoltage_f32 * 100.0f;
+    return ((uint16_t) measuredVoltage_f32);
+    //return(rawAdcVal_u16);
+}
+
+/**---------------------------------------------------------------------------------------
+ * @brief     Interrupt Service Routine for watchdog interrupt vector
+ * @author    winkste
+ * @date      06. Mar. 2018
+ * @WDT_vect  watchdog interrupt vector
+*//*-----------------------------------------------------------------------------------*/
+// watchdog ISR
+ISR(WDT_vect)
+{
+    // nothing to do here, just wake up
+    isrCounter_u16s++;
 }
